@@ -400,7 +400,7 @@ class HamaCommonAgent:
         else:     self.getImagesFromFanartTV(metadata, tvdbid=tvdbid, season=defaulttvdbseason)
     
     ### TVDB mode when a season 2 or more exist ############################################################################################################
-    if not movie and (max(map(int, media.seasons.keys()))>1 or metadata_id_source_core == "tvdb"):
+    if not movie and metadata_id_source_core == "tvdb":
       Log.Info("using TVDB numbering mode (seasons)" )
       if tvdbtitle:          metadata.title                   = tvdbtitle
       if tvdbRating:         metadata.rating                  = tvdbRating
@@ -581,6 +581,7 @@ class HamaCommonAgent:
           
           for episode in anime.xpath('episodes/episode'):   ### Episode Specific ###########################################################################################
             ep_title, main   = self.getAniDBTitle (episode.xpath('title'), EPISODE_LANGUAGE_PRIORITY)
+            summary          = episode.xpath('summary')
             epNum,    eid    = episode.xpath('epno')[0], episode.get('id')
             epNumType        = epNum.get('type')
             season, epNumVal = "1" if epNumType == "1" else "0", epNum.text if epNumType == "1" else str( specials[ epNum.text[0] ][0] + int(epNum.text[1:]))
@@ -589,8 +590,16 @@ class HamaCommonAgent:
                 if op_nb==0: op_nb = int(epNum.text[1:])-1 #first type 3 is first ending so epNum.text[1:] -1 = nb openings
                 epNumVal = str( int(epNumVal) +50-op_nb)   #shifted to 150 for 1st ending.  
               Log.Info("AniDB specials title - Season: '%s', epNum.text: '%s', epNumVal: '%s', ep_title: '%s'" % (season, epNum.text, epNumVal, ep_title) )
-             
-            if not (season in media.seasons and epNumVal in media.seasons[season].episodes):  #Log.Debug("Season: '%s', Episode: '%s' => '%s' not on disk" % (season, epNum.text, epNumVal) )
+
+            if season=="1": # get the real season from plex
+                for seasonFromPlex in media.seasons:
+                    if epNumVal in media.seasons[seasonFromPlex].episodes:
+                        season = seasonFromPlex
+                        Log.Debug("Found new season in Plex: '%s'" % season)
+                        break
+            
+            if not (season in media.seasons and epNumVal in media.seasons[season].episodes): 
+              Log.Debug("Season: '%s', Episode: '%s' => '%s' not on disk" % (season, epNum.text, epNumVal) )
               current_air_date = getElementText(episode, 'airdate').replace('-','')
               current_air_date = int(current_air_date) if current_air_date.isdigit() and int(current_air_date) > 10000000 else 99999999
               if current_date <= (current_air_date+1):  Log.Warn("Episode '%s' is missing in Plex but air date '%s+1' is either missing (99999999) or in the future" % (epNumVal, current_air_date)); continue
@@ -598,6 +607,11 @@ class HamaCommonAgent:
               elif epNumType == "2": missing_specials.append("s" + season + "e" + epNumVal ) 
               continue
             episodeObj = metadata.seasons[season].episodes[epNumVal]
+            
+            if len(summary) > 0:
+                episodeObj.summary = summary[0].text
+                Log.Info("AniDB Summary: '%s'*" % episodeObj.summary)
+
             
             ### AniDB Get the correct episode title ###
             if episodeObj.title == ep_title:  Log.Info("AniDB episode title: '%s'*" % ep_title) 
@@ -640,28 +654,6 @@ class HamaCommonAgent:
             rating = getElementText(episode, 'rating') #if rating =="":  Log.Debug(metadata.id + " Episode rating: ''") #elif rating == episodeObj.rating:  Log.Debug(metadata.id + " update - Episode rating: '%s'*" % rating )
             if not rating =="" and re.match("^\d+?\.\d+?$", rating):  episodeObj.rating = float(rating) #try: float(element) except ValueError:     print "Not a float"
             
-            ### TVDB mapping episode summary ###
-            try:
-              if tvdbid.isdigit():
-                anidb_ep, tvdb_ep, summary= 's' + season + 'e' + epNumVal, "", "No summary in TheTVDB.com" #epNum
-                if anidb_ep in mappingList and mappingList[anidb_ep] in tvdb_table:  tvdb_ep = mappingList [ anidb_ep ]
-                elif 's'+season in mappingList and int(epNumVal) >= int (mappingList['s'+season][0]) and int(epNumVal) <= int(mappingList['s'+season][1]): tvdb_ep = str( int(mappingList['s'+season][2]) + int(epNumVal) )  # season offset + ep number
-                elif defaulttvdbseason=="a" and epNumVal in tvdb_table:              tvdb_ep = str( int(epNumVal) + ( int(mappingList [ 'episodeoffset' ]) if 'episodeoffset' in mappingList and mappingList [ 'episodeoffset' ].isdigit() else 0 ) )
-                elif season=="0":                                                    tvdb_ep = "s"+season+"e"+epNumVal
-                else:                                                                tvdb_ep = "s"+defaulttvdbseason+"e"+ str(int(epNumVal) + ( int(mappingList [ 'episodeoffset' ]) if 'episodeoffset' in mappingList and mappingList [ 'episodeoffset' ].isdigit() else 0 ))
-
-                summary = "TVDB summary missing" if tvdb_ep=="" or tvdb_ep not in tvdb_table else tvdb_table [tvdb_ep] ['Overview'].replace("`", "'")
-                if re.match("^Episode [0-9]{1,4}$", episodeObj.title) and tvdb_ep in tvdb_table: 
-                  ep_title = tvdb_table [tvdb_ep] ['EpisodeName']; episodeObj.title = ep_title
-                  Log.Warn("AniDB episode title is missing but TVDB has one availabe so using it.")
-                mapped_eps.append( anidb_ep + ">" + tvdb_ep )
-                if tvdb_ep in tvdb_table and 'filename' in tvdb_table[tvdb_ep] and tvdb_table[tvdb_ep]['filename']!="":  self.metadata_download (episodeObj.thumbs, TVDB_IMAGES_URL + tvdb_table[tvdb_ep]['filename'], 1, "TVDB/episodes/"+ os.path.basename(tvdb_table[tvdb_ep]['filename']))            
-                Log.Info("TVDB mapping episode summary - anidb_ep: '%s', tvdb_ep: '%s', season: '%s', epNumVal: '%s', defaulttvdbseason: '%s', title: '%s', summary: '%s'" %(anidb_ep, tvdb_ep, season, epNumVal, defaulttvdbseason, ep_title, tvdb_table [tvdb_ep] ['Overview'][0:50].strip() if tvdb_ep in tvdb_table else "") )
-                episodeObj.summary = summary.replace("`", "'")            
-            except Exception as e:
-              Log.Error("Issue in 'TVDB mapping episode summary', epNumVal: '%s'", epNumVal)
-              Log.Error("mappingList = %s" % mappingList)
-              Log.Error("Exception: %s" % e)
           ## End of "for episode in anime.xpath('episodes/episode'):" ### Episode Specific ###########################################################################################
 
           ### AniDB Missing Episodes ###
